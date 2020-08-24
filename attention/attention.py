@@ -24,9 +24,9 @@ class EncoderDecoder(nn.Module):
     def __init__(self,
                  encoder,
                  decoder,
-                 src_embed,
-                 tgt_embed,# 这个是什么意思？
-                 generator): # ？？ =》 见后，就是一个linear transformer + softmax
+                 src_embed,  # 这个是什么意思？ =>同下面的tgt_embed一样，都是个Sequential
+                 tgt_embed,
+                 generator):  # ？？ =》 见后，就是一个linear transformer + softmax
         super(EncoderDecoder, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
@@ -37,14 +37,16 @@ class EncoderDecoder(nn.Module):
     def forward(self, src, tgt, src_mask, tgt_mask):
 
         """
-        1.这个memory 对应的实际含义是什么？
+        1.这个memory 对应的实际含义是什么？这个 memory 是我自己手动重组过的
         """
         memory = self.encode(src,src_mask)
         return self.decode(memory,
                            src_mask,
                            tgt,
                            tgt_mask)
-
+    """ 
+    1.self.encoder(...) 就会去调用被实例化的Encoder的forward()方法
+    2.这里的src_embed()是一个sequential，所以后面会调用sequential的forward()方法"""
     def encode(self, src, src_mask):
         return self.encoder(self.src_embed(src), src_mask)
 
@@ -79,6 +81,10 @@ class Encoder(nn.Module):
         self.layers = clones(layer, N)  # 论文中的N是6层
         self.norm = LayerNorm(layer.size)
 
+    """
+    1.这里的mask是全True的tensor; torch.size([30,1,10])
+    2.这里的forward()函数把 整个Encoder 中所有的模块都给执行完
+    """
     def forward(self, x, mask):
         for layer in self.layers:
             x = layer(x, mask)
@@ -99,8 +105,7 @@ class LayerNorm(nn.Module):
         return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
 
 
-"""这层主要的功能就是实现每个 encoder layer 之间的连接，包括
-LayerNorm功能; 残差网络功能
+"""这层主要的功能就是实现每个 encoder layer 之间的连接，包括:LayerNorm功能; 残差网络功能
 """
 class SublayerConnection(nn.Module):
     def __init__(self, size, dropout):
@@ -113,14 +118,16 @@ class SublayerConnection(nn.Module):
         01.这边就能看出来这是一个残差网络的连接
         首先x就是普通 残差网络中的 虚线；
         self.dropout(sublayer(self.norm(x))) 就是经过网络层处理之后的值
-        02.这个sublayer 即是传入的参数
+        02.这个sublayer 即是传入的参数，但是不理解这里为什么还有一个sublayer传入？ => 因为构成的是残差网络，所以需要这么做
+        LayerNorm(x + Sublayer(x))。 最外层的LayerNorm 没有在这里实现；
         """
         return x + self.dropout(sublayer(self.norm(x)))
 
 
 """
 1.Encoder is made up of self-attn and feed forward.
-2.这是单层的Encoder，所以叫EncoderLayer。这是构成整个Encoder 的小零件
+2.这是单层的Encoder，所以叫EncoderLayer。这是构成整个Encoder 的小零件。N个EncoderLayer就构成了整个Encoder。
+上面这个知识很重要
 """
 class EncoderLayer(nn.Module):
     def __init__(self, size, self_attn, feed_forward, dropout):
@@ -137,8 +144,20 @@ class EncoderLayer(nn.Module):
         self.size = size
 
     def forward(self, x, mask):
+        """
+        :param x:
+        :param mask:
+        :return:
+        1.这里会把 self.self_attn()执行的结果放到 sublayer[0]中继续执行。
+        2.执行完之后，接着再执行 self.feed_forward，将其作为参数传递给sublayer[1]继续执行
+        3.可能会有疑问：既然这里的sublayer[0]操作和sublayer[1]操作是一样的，那么为什么不直接进行一次操作？
+        我觉这个原因就是需要每层求导更新时需要，如果使用同一层，则会出乱子。
+        4.self.self_attn(...)得到的结果
+        5. x = self.sublayer[0](x, lambda x: ...)
+        这个步骤调用的过程是什么？
+        """
         x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, mask))
-        return self.sublayer[1](x, self.feed_forward)
+        return self.sublayer[1](x, self.feed_forward)  # 这里的第二个参数self.feed_forward 就是一个sublayer。
 
 
 """
@@ -198,10 +217,24 @@ class DecoderLayer(nn.Module):
         x = self.sublayer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
         return self.sublayer[2](x, self.feed_forward)
 
-
+"""Mask out subsequent positions"""
 def subsequent_mask(size):
-    attn_shape = (1, size, size)
-    subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8')
+    attn_shape = (1, size, size) # ??
+    """
+    subsequent_mask 的size 是 (1,9,9)
+    [[[0 1 1 1 1 1 1 1 1]
+      [0 0 1 1 1 1 1 1 1]
+      [0 0 0 1 1 1 1 1 1]
+      [0 0 0 0 1 1 1 1 1]
+      [0 0 0 0 0 1 1 1 1]
+      [0 0 0 0 0 0 1 1 1]
+      [0 0 0 0 0 0 0 1 1]
+      [0 0 0 0 0 0 0 0 1]
+      [0 0 0 0 0 0 0 0 0]]]
+    1应该表示被mask了
+    """
+    subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8') # triu函数为取矩阵上三角形
+    print(subsequent_mask)
     return torch.from_numpy(subsequent_mask) == 0
 
 
@@ -269,9 +302,9 @@ class PositionwiseFeedForward(nn.Module):
 
 class Embeddings(nn.Module):
     """
-    这里的vocab 是什么？
+    1.这里的vocab 是什么？
+    2.这个类的功能：use learned embeddings to convert the input tokens and output tokens to vectors of dimention d_model
     """
-
     def __init__(self, d_model, vocab):
         super(Embeddings, self).__init__()
         self.lut = nn.Embedding(vocab, d_model)
@@ -317,9 +350,11 @@ def make_model(src_vocab, tgt_vocab, N=6,
     position = PositionalEncoding(d_model, dropout)
 
     # 得到一个实例
+    # 注意这里并没有按照架构顺序来写。关键原因在于：这里只是传参，真正的架构实现是在EncoderDecoder()中
     model = EncoderDecoder(
         Encoder(EncoderLayer(d_model, c(attn), c(ff), dropout), N),
         Decoder(DecoderLayer(d_model, c(attn), c(attn),c(ff), dropout), N),
+        # 为什么这里使用Sequential? => 因为这是叠加了两层，所以需要使用 Sequential
         nn.Sequential(Embeddings(d_model, src_vocab), c(position)),
         nn.Sequential(Embeddings(d_model, tgt_vocab), c(position)),
         Generator(d_model, tgt_vocab))
@@ -337,10 +372,8 @@ class Batch:
     def __init__(self, src, trg=None, pad=0):
         self.src = src
         self.src_mask = (src != pad).unsqueeze(-2)
-        if trg is not None:
-            self.trg = trg[:, :-1] # 这个相当于直接把数组copy完整过去
-
-
+        if trg is not None:  # 这个trg 就是tgt
+            self.trg = trg[:, :-1] # 这个相当于直接把数组完整copy过去
             """
             这个没有要任一维的起始元素，如果要的话，则是应该写成 trg[:,0:]，那么其维度即是torch.size([30,9])，
             下面给出一个示例
@@ -352,21 +385,28 @@ class Batch:
             但是为什么要这么做呢？
             """
             self.trg_y = trg[:, 1:]
-            self.trg_mask = \
-                self.make_std_mask(self.trg, pad)
+            self.trg_mask = self.make_std_mask(self.trg, pad)
             self.ntokens = (self.trg_y != pad).data.sum()
-    """对下面这个方法不理解？"""
+    """
+    1.对下面这个方法不理解？
+    2. @staticmethod 这个方法
+    """
     @staticmethod
     def make_std_mask(tgt, pad):
-        "Create a mask to hide padding and future words."
+        """
+        Create a mask to hide padding and future words.
+        1.这里的pad是什么意思？ 为什么pad的值为0？ 这里得到的tgt_mask为全 true 的tensor
+        2.tgt.size(-1) 是什么意思？  => 取出tensor 最后一维的大小。因为[]中有9个元素，这里就为9
+        """
         tgt_mask = (tgt != pad).unsqueeze(-2)
-        tgt_mask = tgt_mask & Variable(
+        tgt_mask = tgt_mask & Variable( # 这里会执行按位与操作
             subsequent_mask(tgt.size(-1)).type_as(tgt_mask.data))
         return tgt_mask
 
 
 def run_epoch(data_iter, model, loss_compute):
     "Standard Training and Logging Function"
+    # print(type(data_iter))  # 输出data_iter 的类型  => <class 'generator'>
     start = time.time()
     total_tokens = 0
     total_loss = 0
@@ -472,7 +512,11 @@ def data_gen(V, batch, nbatches):
         data[:, 0] = 1  # 这个操作是将任一维的第1个数据置为1
         src = Variable(data, requires_grad=False) # torch.size([30,10])
         tgt = Variable(data, requires_grad=False)
-        yield Batch(src, tgt, 0)
+        """
+        这里使用yield 方法，只有在真正需要的时候才会具体返回值
+        也就是在run_epoch()函数中的for循环才会真正的得到数据，这里的返回值类型是一个 generator
+        """
+        yield Batch(src, tgt, 0) # tgt 和 trg 一般应该指的都是target
 
 
 class SimpleLossCompute:
@@ -497,10 +541,13 @@ class SimpleLossCompute:
         return loss.item() * norm
 
 
-# Train the simple copy task.
+"""
+1.Train the simple copy task.
+所以这里的使用的字典大小就 [0—9]总共10个数字
+"""
 V = 11
 criterion = LabelSmoothing(size=V, padding_idx=0, smoothing=0.0)
-model = make_model(V, V, N=2)
+model = make_model(V, V, N=2) # 注意这里重写了默认参数N的值，改为了2
 model_opt = NoamOpt(model.src_embed[0].d_model,
                     1, 400,
                     torch.optim.Adam(model.parameters(),
