@@ -37,7 +37,8 @@ class EncoderDecoder(nn.Module):
     def forward(self, src, tgt, src_mask, tgt_mask):
 
         """
-        1.这个memory 对应的实际含义是什么？这个 memory 是我自己手动重组过的
+        1.这个memory 对应的实际含义是什么？，就是输入数据经过Encoder这个模块得到的结果。
+        这个 memory 是我自己手动重组过的 2.这里的src 和 tgt的值是相同的
         """
         memory = self.encode(src,src_mask)
         return self.decode(memory,
@@ -52,6 +53,7 @@ class EncoderDecoder(nn.Module):
 
     def decode(self, memory, src_mask, tgt, tgt_mask):
         # 调用decoder()
+        # 对应架构图中的output Embedding，可以看到这里的 tgt_embed()是一个sequential，集合了Positional Embedding
         return self.decoder(self.tgt_embed(tgt),
                             memory,
                             src_mask,
@@ -119,7 +121,8 @@ class SublayerConnection(nn.Module):
         首先x就是普通 残差网络中的 虚线；
         self.dropout(sublayer(self.norm(x))) 就是经过网络层处理之后的值
         02.这个sublayer 即是传入的参数，但是不理解这里为什么还有一个sublayer传入？ => 因为构成的是残差网络，所以需要这么做
-        LayerNorm(x + Sublayer(x))。 最外层的LayerNorm 没有在这里实现；
+        LayerNorm(x + Sublayer(x))。 最外层的LayerNorm 没有在这里实现
+        03.这里sublayer 也可以是一个其它的东西，大多数情况下，它是一个layer，但也有可能是一个 lambda表达式
         """
         return x + self.dropout(sublayer(self.norm(x)))
 
@@ -148,13 +151,12 @@ class EncoderLayer(nn.Module):
         :param x:
         :param mask:
         :return:
-        1.这里会把 self.self_attn()执行的结果放到 sublayer[0]中继续执行。
+        1. x = self.sublayer[0](x, lambda x: ...)
+        这个步骤调用的过程是什么？  => 这里会把一个<function> 对象作为参数传入到 sublayr[0]中
         2.执行完之后，接着再执行 self.feed_forward，将其作为参数传递给sublayer[1]继续执行
         3.可能会有疑问：既然这里的sublayer[0]操作和sublayer[1]操作是一样的，那么为什么不直接进行一次操作？
         我觉这个原因就是需要每层求导更新时需要，如果使用同一层，则会出乱子。
         4.self.self_attn(...)得到的结果
-        5. x = self.sublayer[0](x, lambda x: ...)
-        这个步骤调用的过程是什么？
         """
         x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, mask))
         return self.sublayer[1](x, self.feed_forward)  # 这里的第二个参数self.feed_forward 就是一个sublayer。
@@ -170,33 +172,9 @@ class Decoder(nn.Module):
         self.norm = LayerNorm(layer.size)  # 这里的layer.size 不是很理解
 
     def forward(self, x, memory, src_mask, tgt_mask):
-        for layer in self.layers:
+        for layer in self.layers:# 这个就会调用DecoderLayer 中的forward()函数
             x = layer(x, memory, src_mask, tgt_mask)
         return self.norm(x)
-
-
-"""
-定义实现 Decoder layer
-这是我自己定义的
-"""
-#
-# class DecoderLaye(nn.Module):
-#     def __init__(self, self_attn, mask_attn, feed_forward, sublayer):
-#         super(DecoderLayer, self).__init__()
-#         "按照顺序定义网络结构"
-#         self.self_attn = self_attn
-#         self.feed_forward = feed_forward
-#         self.mask_attn = mask_attn
-#         self.sublayer = sublayer
-#
-#     # 输入的数据是什么？ => encoder 得到的结果
-#     def forward(self, x):
-#         x = self.mask_attn(x)  # 先经过masked multi-head attention
-#         x = self.sublayer(x)  # 再由 layerNorm + resnet 处理
-#         x = self.self_attn(x)  # ...
-#         x = self.sublayer(x)
-#         x = self.feed_forward(x)
-#         x = self.sublayer(x)
 
 
 class DecoderLayer(nn.Module):
@@ -411,6 +389,9 @@ def run_epoch(data_iter, model, loss_compute):
     total_tokens = 0
     total_loss = 0
     tokens = 0
+    """
+    batch 包含的是句子对，在这里就是一个数字对。这一个个数字对就用于训练 Encoder-Decoder 这个架构
+    """
     for i, batch in enumerate(data_iter):
         out = model.forward(batch.src, batch.trg,
                             batch.src_mask, batch.trg_mask)
@@ -561,7 +542,7 @@ for epoch in range(10):
     model.eval()
     print(run_epoch(data_gen(V, 30, 5),
                     model,
-                    SimpleLossCompute(model.generator, criterion, None)))
+                    SimpleLossCompute(model.generator, criterion, None))) # 可以看到这里的在做测试是，是没有优化器的
 
 
 # def greedy_decode(model, src, src_mask, max_len, start_symbol):
