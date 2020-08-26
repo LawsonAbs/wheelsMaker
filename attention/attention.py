@@ -54,7 +54,7 @@ class EncoderDecoder(nn.Module):
     def decode(self, memory, src_mask, tgt, tgt_mask):
         # 调用decoder()
         # 对应架构图中的output Embedding，可以看到这里的 tgt_embed()是一个sequential，集合了Positional Embedding
-        return self.decoder(self.tgt_embed(tgt),
+        return self.decoder(self.tgt_embed(tgt), # 这里的tgt是初始值，就是生成的数字序列
                             memory,
                             src_mask,
                             tgt_mask)
@@ -163,7 +163,8 @@ class EncoderLayer(nn.Module):
 
 
 """
-定义这种Decoder 是干什么的？为什么需要？
+1.定义这种Decoder 是干什么的？为什么需要？
+这个Decoder 代表的意思就是 整个decoder框架，它是由 N个decoder layer 构成的。
 """
 class Decoder(nn.Module):
     def __init__(self, layer, N):
@@ -188,11 +189,10 @@ class DecoderLayer(nn.Module):
         # 因为 Add&Norm 这种层在decoder layer中有三个
         self.sublayer = clones(SublayerConnection(size, dropout), 3)
 
-    # memeory 是干什么的？
+    # memeory 是干什么的？ =》 是Encoder 块处理后得到的数据
     def forward(self, x, memory, src_mask, tgt_mask):
-        m = memory
-        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
-        x = self.sublayer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
+        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))  # 这是self-attention
+        x = self.sublayer[1](x, lambda x: self.src_attn(x, memory, memory, src_mask))  # 这是对encoder传入的数据进行attention
         return self.sublayer[2](x, self.feed_forward)
 
 """Mask out subsequent positions"""
@@ -218,14 +218,14 @@ def subsequent_mask(size):
 
 """
 定义至关重要的 attention 函数
-01.观察需要哪些参数
+01.观察需要哪些参数 mask为全True的tensor，size为(30,1,1,10)
 """
 def attention(query, key, value, mask=None, dropout=None):
-    d_k = query.size(-1)
-    scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
-    if mask is not None:
+    d_k = query.size(-1) # 难道这里的 transpose(-2,-1)操作就是转置了吗？
+    scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k) # 计算scores
+    if mask is not None:  # 这里是唯一一个在attention中用到mask的地方，这就是进行屏蔽的操作。
         scores = scores.masked_fill(mask == 0, -1e9)
-    p_attn = F.softmax(scores, dim=-1)
+    p_attn = F.softmax(scores, dim=-1)  # 针对具体的维度取softmax
     if dropout is not None:
         p_attn = dropout(p_attn)
     return torch.matmul(p_attn, value), p_attn
@@ -234,35 +234,55 @@ def attention(query, key, value, mask=None, dropout=None):
 """
 1.实现multi-head attention。不过这里直接定义了一个类，为什么不是函数呢？
 2.
+01.继承nn.Module 类
+02.
 """
 class MultiHeadedAttention(nn.Module):
+    """
+    :parameter
+        h：代表做h次线性投影。我觉得就是multi-head中国head的个数，在本例子中，传入的h为8
+        d_model: 通常是512
+    """
     def __init__(self, h, d_model, dropout=0.1):
         super(MultiHeadedAttention, self).__init__()
-        assert d_model % h == 0
-        self.d_k = d_model // h
-        self.h = h
+        assert d_model % h == 0  # assert（断言）用于判断一个表达式，在表达式条件为 false 的时候触发异常。
+        self.d_k = d_model // h  # 因为最后要拼凑起一个维度 为d_model 大小的向量，而每个h(head)均分得到d_k
+        self.h = h  # 判断合格之后，开始赋值
+
+        # 这里为什么是4？ => 因为在multi-head Attention 中涉及到4个Linear 操作
+        # 三个linear 分别应用在V，K，Q上，最后一个应用在concat的结果上
+        # 为什么需要做这个 linear 操作？=> 可以见我个人博客(lawson-t.blog.csdn.net)说明
         self.linears = clones(nn.Linear(d_model, d_model), 4)
         self.attn = None
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, query, key, value, mask=None):
         if mask is not None:
-            mask = mask.unsqueeze(1)
-        nbatches = query.size(0)
+            mask = mask.unsqueeze(1)  # 为什么要做这个unsqueeze()操作？
+        nbatches = query.size(0)  # 代表什么意思？
 
         # 1) Do all the linear projections in batch from d_model => h x d_k
-        query, key, value = \
-            [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
+        """ 这里是一个列表生成表达式
+        01.功能如下：依次处理（做线性变换，linear projections）query,key,value 这三个tensor
+        02.将得到的结果变一下形状，具体是 .view(nbatches,-1,self.h,self.d_k).transpose(1,2)这个操作
+        03.这行代码对于python新手不好懂     
+        04.下面的temp完全是为了方便看整个过程query 的变化，并在其后注明了每个时刻的维度        
+        """
+        temp = self.linears[0](query)  # (10,4,512) => (10,4,512)
+        temp = temp.view(nbatches,-1,self.h,self.d_k)  # (10,4,8,64)
+        temp = temp.transpose(1, 2) # (10,8,4,64)
+        # 为什么要transpose?
+        query, key, value = [l(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
              for l, x in zip(self.linears, (query, key, value))]
 
         # 2) Apply attention on all the projected vectors in batch.
-        x, self.attn = attention(query, key, value, mask=mask,
+        x, self.attn = attention(query, key, value,  # 其实就是一个函数，没有什么特别的地方
+                                 mask=mask,
                                  dropout=self.dropout)
 
         # 3) "Concat" using a view and apply a final linear.
-        x = x.transpose(1, 2).contiguous() \
-            .view(nbatches, -1, self.h * self.d_k)
-        return self.linears[-1](x)
+        x = x.transpose(1, 2).contiguous().view(nbatches, -1, self.h * self.d_k)
+        return self.linears[-1](x)  # 最后还有一个linear
 
 
 class PositionwiseFeedForward(nn.Module):
@@ -323,12 +343,13 @@ def make_model(src_vocab, tgt_vocab, N=6,
                d_model=512, d_ff=2048, h=8, dropout=0.1):
     "Helper: Construct a model from hyperparameters."
     c = copy.deepcopy
-    attn = MultiHeadedAttention(h, d_model)
+    attn = MultiHeadedAttention(h, d_model)  # 8头的attention
     ff = PositionwiseFeedForward(d_model, d_ff, dropout)
     position = PositionalEncoding(d_model, dropout)
 
     # 得到一个实例
     # 注意这里并没有按照架构顺序来写。关键原因在于：这里只是传参，真正的架构实现是在EncoderDecoder()中
+    # c(attn)是不是会得到一个全新的引用？
     model = EncoderDecoder(
         Encoder(EncoderLayer(d_model, c(attn), c(ff), dropout), N),
         Decoder(DecoderLayer(d_model, c(attn), c(attn),c(ff), dropout), N),
@@ -393,9 +414,9 @@ def run_epoch(data_iter, model, loss_compute):
     batch 包含的是句子对，在这里就是一个数字对。这一个个数字对就用于训练 Encoder-Decoder 这个架构
     """
     for i, batch in enumerate(data_iter):
-        out = model.forward(batch.src, batch.trg,
+        out = model.forward(batch.src, batch.trg, # size([30,9,512])
                             batch.src_mask, batch.trg_mask)
-        loss = loss_compute(out, batch.trg_y, batch.ntokens)
+        loss = loss_compute(out, batch.trg_y, batch.ntokens)  # 进入 __call__()函数
         total_loss += loss
         total_tokens += batch.ntokens
         tokens += batch.ntokens
@@ -489,9 +510,9 @@ class LabelSmoothing(nn.Module):
 "Generate random data for a src-tgt copy task."
 def data_gen(V, batch, nbatches):
     for i in range(nbatches):
-        data = torch.from_numpy(np.random.randint(1, V, size=(batch, 10)))
+        data = torch.from_numpy(np.random.randint(1, V, size=(batch, 5)))
         data[:, 0] = 1  # 这个操作是将任一维的第1个数据置为1
-        src = Variable(data, requires_grad=False) # torch.size([30,10])
+        src = Variable(data, requires_grad=False) # torch.size([30,5])
         tgt = Variable(data, requires_grad=False)
         """
         这里使用yield 方法，只有在真正需要的时候才会具体返回值
@@ -508,8 +529,8 @@ class SimpleLossCompute:
         self.criterion = criterion
         self.opt = opt
 
-    # 熟悉一下 __call__()  方法
-    # 是在什么时候调用的？
+    # 熟悉一下 __call__()  方法     # 是在什么时候调用的？  => 计算损失时，就会来调用这个函数
+    # x 应该是模型的输出，y是原标签值
     def __call__(self, x, y, norm):
         x = self.generator(x)
         loss = self.criterion(x.contiguous().view(-1, x.size(-1)),
@@ -536,11 +557,11 @@ model_opt = NoamOpt(model.src_embed[0].d_model,
 
 for epoch in range(10):
     model.train()
-    run_epoch(data_gen(V, 30, 20),
+    run_epoch(data_gen(V, 10, 5), # 10：表示数据的维度；  5表示数据的共有多少个batch
               model,
               SimpleLossCompute(model.generator, criterion, model_opt))
     model.eval()
-    print(run_epoch(data_gen(V, 30, 5),
+    print(run_epoch(data_gen(V, 10, 5),
                     model,
                     SimpleLossCompute(model.generator, criterion, None))) # 可以看到这里的在做测试是，是没有优化器的
 
