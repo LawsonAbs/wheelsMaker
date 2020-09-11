@@ -1,3 +1,8 @@
 .idea/
 attention/.ipynb_checkpoints/
 attention/__pycache__/
+text_cls/util/__pycache__/
+pytorch_light/MNIST/
+pytorch_light/lightning_logs/
+text_cls/data/other/
+text_cls/data/original_dataset/
