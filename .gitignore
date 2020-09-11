@@ -6,3 +6,7 @@ pytorch_light/MNIST/
 pytorch_light/lightning_logs/
 text_cls/data/other/
 text_cls/data/original_dataset/
+text_cls/__pycache__/
+text_cls/data/__pycache__/
+text_cls/data/*.csv
+*.docx
