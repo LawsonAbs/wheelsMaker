@@ -12,3 +12,6 @@ text_cls/data/*.csv
 *.docx
 text_cls/data/other/
 text_cls/data/original_dataset/
+ner/data/__pycache__/
+ner/models/__pycache__/
+ner/tools/__pycache__/
