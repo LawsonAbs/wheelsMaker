@@ -4,6 +4,33 @@
 import re
 import config as con
 
+
+def getCont2List(filePath,left,right):
+    """
+    1.功能：根据源数据获取文本内容cont
+    01.这里的labels 是数值化的，也就是通过和id对应过的
+    02.如果这里的 cont 长度超过510， 那么就要做相应的分割，分成多个部分
+    03.[left,right) 表示一个区间，用于获取文件数据
+    :param filePath: '/home/liushen/brat/data/train'
+    :return:
+    """
+    conte = []
+    for i in range(left,right):  # 文件数在1000以内
+        txtFileName = filePath + '/' +  str(i) + '.txt'  # 得到标签文件
+        with open(txtFileName,encoding='utf8') as f:
+            article = f.read()
+            contLen = len(article)  # 得到文本内容的长度，然后生成一个这么大的数组
+
+        # 其实下面这个功能有点儿鸡肋，是完全不必要的
+        if contLen > con.MAX_LENGTH:
+            article = splitLine(article)  # 分割文本内容
+            conte.extend(article)
+        else:
+            conte.append(article)
+    return conte  # 返回文本内容list
+
+
+
 def getLabels2List(filePath,left,right):
     """
     1.功能：根据源数据获取文本内容cont 和 生成labels
@@ -46,7 +73,7 @@ def getLabels2List(filePath,left,right):
                 for j in range(left+1,right):  # 修改这个区间中的标签值
                     curLabel[j] = lables2ID[rightTab]
                 line = f.readline()
-
+        # 其实下面这个功能有点儿鸡肋，是完全不必要的
         if contLen > con.MAX_LENGTH:
             article = splitLine(article)  # 分割文本内容
             conte.extend(article)
