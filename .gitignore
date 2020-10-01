@@ -16,3 +16,5 @@ ner/data/__pycache__/
 ner/models/__pycache__/
 ner/tools/__pycache__/
 ner/*.abc
+ner/*.log
+*/__pycache__/
