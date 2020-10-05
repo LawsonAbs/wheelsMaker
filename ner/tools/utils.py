@@ -132,12 +132,18 @@ def predictFake(predictFilePath, modelPath):
         print("Prediction Done!")
 
 
+
+'''
+将字典信息dic写入到文件fileName中
+'''
+def writeDict2File(dic,fileName):
+    with open(fileName,'w') as f:
+        dic = str(dic)  # 先转换为string，否则无法写入文本
+        f.write(dic)
+    
+
+
 if __name__ == "__main__":
-    res = [['T1', 'DRUG_EFFICACY', 1, 4, '补气血'],
-            ['T2', 'DRUG_EFFICACY', 5, 8, '调月经'],
-            ['T3', 'DRUG_EFFICACY', 45, 48, '活血调'],
-            ['T4', 'SYNDROME', 52, 56, '气血两虚'],
-            ['T5', 'DRUG_EFFICACY', 56, 60, '益气养血'],
-            ['T6', 'DRUG_EFFICACY', 61, 65, '活血调经']]
-    filePath = "/home/liushen/brat/data/test/1.ann"
-    writeOut2File(res,filePath)
+    info = {'name':'lawson','age':24}
+    fileName = '/home/liushen/a.txt'
+    writeDict2File(info,fileName)

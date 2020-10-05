@@ -16,6 +16,7 @@ import datetime as dt
 import sys
 from transformers import BertTokenizerFast  # 根据tokens反向生成word
 from tools.utils import *
+import re
 
 label2Id,id2Label = label2IdFromAnn('/home/liushen/brat/data/train')
 
@@ -32,8 +33,19 @@ entity2Id = getEntity2DictFromAnn('/home/liushen/brat/data/train')
 entity2Tag = getEntity2TagFromAnn('/home/liushen/brat/data/train')
 
 
+"""
+处理entity2Tag 中不符合条件的值。
+01.将 entity2Tag 中的 entity 从长到短进行排序，也就是说，这里优先用长的，然后再用短的entity。
+"""
+def processEntityTag(entity2Tag):            
+    entity2Tag = sorted(entity2Tag.items(),key = lambda entity2Tag:len(entity2Tag[0]),reverse=True)
+    entity2Tag = dict(entity2Tag) # 转为dict
+    return entity2Tag
 
-"""是对整个batch 的数据进行处理
+entity2Tag = processEntityTag(entity2Tag)
+writeDict2File(entity2Tag,'/home/liushen/entity2Tag.txt')
+
+"""是对整个batch 的数据进行处理 
 这个batch 就是一个list
 """
 def load_fn(batch):
@@ -107,7 +119,7 @@ def train(filePath,modelPath):
     model.to(device)
 
     # 开始训练
-    for epoch in tqdm(range(50)):
+    for epoch in tqdm(range(40)):
         # 遍历dataloader 的值
         totalLoss = 0 # 计算总得loss 值
         avgLoss = 0 # 计算平均loss 值   # tqdm写在 enumerate 的里面
@@ -143,9 +155,11 @@ def train(filePath,modelPath):
     t.save(model.state_dict(),modelPath)
 
 
-def predict(predictFilePath,modelPath,num):
+def predict(model,tokenizer,predictFilePath,resPath,num):
     """
     每次可以预测单个文件，因为多个文件涉及到下标标注问题。这里就没有涉及了
+    :param model: 已经训练好的模型
+    :param: tokenizer ：使用的tokenizer
     :param predictFilePath: 待预测文件所在的文件夹路径
     :param modelPath:  训练好的模型
     :param resPath:  生成结果文件的路径
@@ -154,7 +168,7 @@ def predict(predictFilePath,modelPath,num):
     """
     # step1.准备数据 => 预测单个文件
     conte = getCont2List(predictFilePath,num,num+1)
-    fileName = predictFilePath+str(num)+".ann"  # 得到预测结果文件
+    resPath = resPath+str(num)+".ann"  # 得到预测结果文件的路径
     print(f"predict {num} ")
     dataset = MyTestDataSet(conte)
     data_loader = DataLoader(dataset=dataset,
@@ -162,14 +176,6 @@ def predict(predictFilePath,modelPath,num):
                               collate_fn=load_fn_predict,  # 传入一个处理数据的参数
                               shuffle=False,  # 为方便调试，可以设置为False
                               num_workers=0)  # 用几个进程加载数据
-
-    model = BaseLine(768,14)
-    model.load_state_dict(t.load(modelPath))  # 加载模型
-    device = t.device("cuda:0" if t.cuda.is_available() else "cpu")
-    model.to(device)
-    # 需要反解得到字符，所以用到tokenizer
-    # 同时需要用到 return_offset_mapping 这个字段
-    tokenizer = BertTokenizerFast.from_pretrained('bert-base-chinese')
 
     res = {} # 生成最后的结果
     # 开始针对文本数据生成label
@@ -180,6 +186,8 @@ def predict(predictFilePath,modelPath,num):
             data = item['inputs']  # 因为返回的值是一个dict，所以这里取出来
             # 将data中的每个value都变成cuda类型
             data = {key:data[key].cuda() for key in data}
+            # 需要反解得到字符，所以用到tokenizer
+            # 同时需要用到 return_offset_mapping 这个字段
             offset_mapping = data['offset_mapping']  # 留下offset_mapping 的值，也是一个多维的数组
             if 'offset_mapping' in data.keys():
                 del(data['offset_mapping'])  # 删除
@@ -230,7 +238,7 @@ def predict(predictFilePath,modelPath,num):
         allConte = "" # 字符串内容
         for i in range(len(conte)):
             allConte += conte[i]
-        writePred2Ann(res,allConte,fileName)
+        writePred2Ann(res,allConte,resPath)
 
     print(f"file {num} is Done!")
 
@@ -247,7 +255,7 @@ res 长如下的样子：
 120: 'SYMPTOM', 121: 'SYMPTOM', 122: 'SYMPTOM',123: 'SYMPTOM', 124: 'SYMPTOM', 125: 'SYMPTOM', 
 145: 'DRUG_EFFICACY',146: 'DRUG_EFFICACY', 147: 'DRUG_EFFICACY', 148: 'DRUG_EFFICACY'}
 '''
-def writePred2Ann(res,conte,fileName):
+def writePred2Ann(res,conte,resPath):
     """
     功能：根据预测结果res 结合关键字，生成预测文件
     :param res: 预测结果
@@ -282,23 +290,49 @@ def writePred2Ann(res,conte,fileName):
             previousValue = value
             cnt += 1
             out.append(temp)
+    if cnt != 1:  # 说明 不是第一个
+        entityNum = "T"+str(cnt)  # 还要再往后延一个，否则得到的最后一个会有重复
+    temp = []  # 重置为空列表，否则会在上面的基础上继续添加从而出现错误
     temp.extend([entityNum, previousValue, previousLeft, previousRight + 1])
-    temp.append(conte[previousLeft:previousRight+1])
+    temp.append(conte[previousLeft:previousRight+1])  # 因为想添加字符串，所以这里使用的是append
     out.append(temp)
 
     # 处理out的值
     out = processPredAnn(out)
-    for pred in out:
+    allIndex = []  # 记录下所有 被标记过 的下标值
+    # 为了避免重复添加，所以这里把被标记过的下标都放进去了
+    for pred in out:                
+        allIndex.extend( [_ for _ in range(pred[2],pred[3])])
         print(pred)
 
-    with open(fileName,'w') as f:
+    # 使用字典加入没有预测出来但是是正确的结果    
+    for key in entity2Tag.keys():
+        if key in conte : # 如果是个结果
+            keyLen = len(key)
+            value = entity2Tag[key]  # 得到值
+            # left = conte.index(key)  # 可能是个列表，所以直接求 index的做法是错误的
+            leftList = [i.start() for i in re.finditer(key,conte)]  # 这个left是个[]
+            for left in leftList:
+                # 如果并没有把这个值放到里面去
+                # 但是需要动态更新allIndex 的值（把left-right整个区间都加上），因为可能会导致重复添加
+                if left not in allIndex:  
+                    cnt += 1
+                    entityNum = "T"+str(cnt)
+                    # 追加一个结果
+                    out.append([entityNum,value,left,left+keyLen,conte[left:left+keyLen]])
+                    # 动态修改allIndex 的值
+                    allIndex.extend([i for i in range(left,left+keyLen)])
+
+    with open(resPath,'w') as f:
         for line in out:
             row = line[0]+'\t'+line[1]+" "+str(line[2])+" "+str(line[3])+"\t"+line[4]+"\n"
             f.write(row)
     return out
 
+
 '''
 处理生成的预测值。处理准则如下：
+这个方法比较鸡肋，貌似有用，但实际没什么用。
 01.如果是单个值，则直接删除
 02.如果句子过长，且可以分为两个，则分成多组，分组过程根据dict来分
 '''
@@ -308,24 +342,47 @@ def processPredAnn(out):
         left,right = pred[2:4]
         left = int(left)
         right = int(right)
-        if left +1 == right: # 预测中只有一个字，这种要删除
+        # 预测中只有一个字，这种要删除  => 这里其实不正确，因为有的单个字出现就是合理的
+        # 比如：“辣”，“辛” 等等
+        # 其实这里可以用一个概率来衡量，但是该怎么实现呢？
+        if left +1 == right: 
             continue
         else:  # 如果不止一个字，则放到预测结果中
             res.append(pred)
     return res
 
 
+"""
+使用字典补充预测结果
+"""
+def addByAnn():
+    pass
+
+
 if __name__ == "__main__":
     if len(sys.argv) <= 1:
         print("参数不足")
+        
     elif sys.argv[1] == 'test':
         print("in test")
     elif sys.argv[1] == 'predict':
+        #predictFilePath = "/home/liushen/brat/data/train"
         predictFilePath = "/home/liushen/brat/data/test"
         modelPath = "20200930_091658.abc"  # 当前这个目录下
-        for i in range(1364,1365):
+        #resPath = "/home/liushen/brat/data/train_pred/"  # 针对训练数据生成的预测结果
+        resPath = "/home/liushen/brat/data/answer/"  # 针对训练数据生成的预测结果
+
+        # 加载已经训练好的模型
+        model = BaseLine(768, 14)
+        model.load_state_dict(t.load(modelPath))  # 加载模型
+        device = t.device("cuda:0" if t.cuda.is_available() else "cpu")
+        model.to(device)
+        tokenizer = BertTokenizerFast.from_pretrained('bert-base-chinese')
+
+        # 对每个文件执行预测
+        for i in range(1000,1500):
             print("in predict")
-            predict(predictFilePath, modelPath, i)  # 预测第i个文件的结果
+            predict(model,tokenizer,predictFilePath, resPath,i)  # 预测第i个文件的结果
     else:
         print("in train")
         filePath = "/home/liushen/brat/data/train"
