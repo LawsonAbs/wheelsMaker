@@ -18,3 +18,4 @@ ner/tools/__pycache__/
 ner/*.abc
 ner/*.log
 */__pycache__/
+.vscode/
