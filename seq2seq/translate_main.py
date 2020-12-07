@@ -1,7 +1,7 @@
 '''
 Author: LawsonAbs
 Date: 2020-12-06 15:18:43
-LastEditTime: 2020-12-07 09:48:46
+LastEditTime: 2020-12-07 11:15:44
 FilePath: /wheels/seq2seq/translate_main.py
 01.实现的功能是：将英文翻译成中文
 02.这里使用torchtext 将xml文件内容变成可以用torchtext 处理的Dataset 
@@ -47,7 +47,7 @@ def tokenize_en(text):
     Tokenizes English text from a string into a list of strings (tokens)
     01. [::-1]的作用就是 step=-1，start=-1 开始，直到end
     """    
-    return [tok.text for tok in spacy_en.tokenizer(text)][::-1]
+    return [tok.text for tok in spacy_en.tokenizer(text)]#[::-1]
 
 def tokenize_zh(text):
     return list(jieba.cut(text))
@@ -72,19 +72,33 @@ examples = []
 PATH = "/home/lawson/program/wheels/seq2seq/data/" 
 src_file = pd.readXml(PATH+"en.xml") # source
 trg_file = pd.readXml(PATH+"zh.xml") # target
-fields = [("label", SRC), ("text", TRG)]
+fields = [("src", SRC), ("trg", TRG)]
 
 for src_line, trg_line in zip(src_file, trg_file):
     src_line, trg_line = src_line.strip(), trg_line.strip()
     if src_line != '' and trg_line != '':
-        # 需要注意下面这个 fields 的使用
+        # TODO 需要注意下面这个 fields 的使用
         temp = data.Example.fromlist([src_line, trg_line], fields)
         examples.append(temp)
 
-
+print(vars(examples[0]))
 # 根据得到的example,构建一个Dataset，得到 trainData
 allData = tDataset(examples,fields)
-trainData,validData,testData = allData.split() #再分割成三份
+trainData,validData,testData = allData.split(split_ratio=[0.8,0.1,0.1]) #再分割成三份
+
+
+# 只根据训练数据（trainData）构建字典
+SRC.build_vocab(trainData)
+TRG.build_vocab(trainData)
+
+BATCH_SIZE = 12
+device = t.device("cuda:0" if t.cuda.is_available() else "cpu")
+train_iterator, valid_iterator, test_iterator = BucketIterator.splits(
+    (trainData, validData, testData), 
+    batch_size = BATCH_SIZE, 
+    sort=False,
+    device = device   
+    )
 
 INPUT_DIM = len(SRC.vocab) 
 OUTPUT_DIM = len(TRG.vocab) 
@@ -97,20 +111,24 @@ DEC_DROPOUT = 0.5
 
 encoder = Encoder(INPUT_DIM, ENC_EMB_DIM, HID_DIM, N_LAYERS, ENC_DROPOUT)
 decoder = Decoder(OUTPUT_DIM, DEC_EMB_DIM, HID_DIM, N_LAYERS, DEC_DROPOUT)
-model = Seq2Seq(encoder,decoder).to(device)
+
+model = Seq2Seq(encoder,decoder,device).to(device)
 model.apply(init_weights)
 criterion = nn.CrossEntropyLoss()
 optimizer = t.optim.Adam(model.parameters())     
+N_EPOCHS = 10
+CLIP = 1
+best_valid_loss = float('inf')
 
-
+# iterator -> train_iterator
 def train(model, iterator, optimizer, criterion, clip):    
-    model.train()    
+    model.train()
     epoch_loss = 0
     
     for i, batch in enumerate(iterator):        
-        src = batch.src
-        trg = batch.trg        
-        optimizer.zero_grad()        
+        src = batch.src # torch.size([23,BATCH_SIZE])  
+        trg = batch.trg
+        optimizer.zero_grad()
         output = model(src, trg)
         
         #trg = [trg len, batch size]
@@ -162,11 +180,7 @@ def epoch_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 
-N_EPOCHS = 10
-CLIP = 1
-best_valid_loss = float('inf')
-
-for epoch in range(N_EPOCHS):    
+for epoch in range(N_EPOCHS):
     start_time = time.time()    
     train_loss = train(model, train_iterator, optimizer, criterion, CLIP)
     valid_loss = evaluate(model, valid_iterator, criterion)

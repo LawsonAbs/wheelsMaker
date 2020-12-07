@@ -1,7 +1,7 @@
 '''
 Author: LawsonAbs
 Date: 2020-12-06 15:43:34
-LastEditTime: 2020-12-06 20:18:30
+LastEditTime: 2020-12-07 10:54:37
 FilePath: /wheels/seq2seq/decoder.py
 '''
 import torch.nn as nn
@@ -26,15 +26,22 @@ class Decoder(nn.Module):
         #TODO 搞清楚这里的Embedding是随机初始化还是找表得到!!!!!!!!!!!!
         self.embedding = nn.Embedding(output_dim,emb_dim)
         self.dropout = nn.Dropout(dropout)        
-        self.rnn = nn.LSTM(hid_dim,hid_dim,n_layers,dropout=dropout) # 使用LSTM进行编码
+        self.rnn = nn.LSTM(emb_dim,hid_dim,n_layers,dropout=dropout) # 使用LSTM进行编码
         self.liear = nn.Linear(hid_dim,output_dim) # 线性映射
         
-    # 注意每次的输入
+    # 注意每次的输入 hiddn 和 cell 的大小相同。
     # 这个decoder 每次都只能得到一个输出，需要重复的执行这个方法才能得到最后的一个输出
     def forward(self,input,hidden,cell): # 对输入数据进行编码，依次做的处理
-        input = input.unsqueeze(0)
+        input = input.unsqueeze(0) # 添加新的一维  => input = [1,batch size]
         embedded = self.dropout(self.embedding(input))
+
         outputs,(hidden,cell) = self.rnn(embedded,(hidden,cell))
         prediction = self.liear(outputs.squeeze(0))
         
         return prediction,hidden,cell
+
+        #hidden = [n layers * n directions, batch size, hid dim]
+        #cell = [n layers * n directions, batch size, hid dim]
+        #n directions in the decoder will both always be 1, therefore:
+        #hidden = [n layers, batch size, hid dim]
+        #context = [n layers, batch size, hid dim]

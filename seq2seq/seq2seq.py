@@ -1,7 +1,7 @@
 '''
 Author: LawsonAbs
 Date: 2020-12-06 19:13:02
-LastEditTime: 2020-12-06 21:11:32
+LastEditTime: 2020-12-07 10:47:53
 FilePath: /wheels/seq2seq/seq2seq.py
 '''
 """
@@ -13,6 +13,7 @@ import random
 
 class Seq2Seq(nn.Module):
     def __init__(self,encoder,decoder,device):
+        super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.device = device
@@ -29,7 +30,7 @@ class Seq2Seq(nn.Module):
         #teacher_forcing_ratio is probability to use teacher forcing
         #e.g. if teacher_forcing_ratio is 0.75 we use ground-truth inputs 75% of the time
         
-        # 为什么叫 batch_size ?
+        # 为什么叫 batch_size ? => 因为就是实际中的batch_size 
         batch_size = trg.shape[1]
         trg_len = trg.shape[0]
         trg_vocab_size = self.decoder.output_dim
@@ -41,17 +42,18 @@ class Seq2Seq(nn.Module):
         hidden, cell = self.encoder(src)
         
         # first input to the decoder is the <sos> tokens
-        # tensor中独有的切片操作。 取第0维的所有数，也就是sos的向量表示
+        # tensor中独有的切片操作。 取第0维的所有数，也就是sos的向量表示。
+        # 这里得到的结果是所有batch的sos 表示。其值为：tensor([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2], device='cuda:0')
         input = trg[0,:]
         
         # 逐个生成得到最后的预测结果
-        for t in range(1, trg_len):
+        for i in range(1, trg_len):
             #insert input token embedding, previous hidden and previous cell states
             #receive output tensor (predictions) and new hidden and cell states
             output, hidden, cell = self.decoder(input, hidden, cell)
             
             #place predictions in a tensor holding predictions for each token
-            outputs[t] = output
+            outputs[i] = output
             
             #decide if we are going to use teacher forcing or not
             teacher_force = random.random() < teacher_forcing_ratio
@@ -61,6 +63,6 @@ class Seq2Seq(nn.Module):
             
             #if teacher forcing, use actual next token as next input
             #if not, use predicted token
-            input = trg[t] if teacher_force else top1
+            input = trg[i] if teacher_force else top1
         
         return outputs

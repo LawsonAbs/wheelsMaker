@@ -1,7 +1,7 @@
 '''
 Author: LawsonAbs
 Date: 2020-12-06 15:53:06
-LastEditTime: 2020-12-06 21:39:37
+LastEditTime: 2020-12-07 10:22:21
 FilePath: /wheels/seq2seq/processdata.py
 处理数据的脚本
 01.我修改了en.xml 和 zh.xml 中的若干条数据，因为这些数据导致解析xml时，出现格式错误。
@@ -26,9 +26,7 @@ def readXml(path):
     conts = [] # 存储英语句的列表
     maxLen = 0 # 求解句子的最大长度    
     for text in segs:                
-        a = text.firstChild.data        
-        a = "<sos>" + a # 加入了起止标识 
-        a = a + "<eos>" 
+        a = text.firstChild.data                
         # print(a)  # 输出某句话
         conts.append(a)
         maxLen = max(maxLen,len(a))
